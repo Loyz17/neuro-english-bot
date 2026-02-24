@@ -1,0 +1,15 @@
+services:
+  # Бесплатный Web Service с веб-хуком
+  - type: web
+    name: neuro-english-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /health
+    envVars:
+      - key: TG_TOKEN
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: RENDER_EXTERNAL_URL
+        sync: false
