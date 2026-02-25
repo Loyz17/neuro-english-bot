@@ -1,5 +1,8 @@
 import asyncio
-import random
+from aiogram import Dispatcher, types
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters import CommandStart, Command
+from aiogram.dispatcher.filters.state import State, StatesGroup
 import app.keyboards as kb
 from app.ai_teacher import generate_lesson, check_answer
 from app.database import (
@@ -7,17 +10,11 @@ from app.database import (
     complete_lesson, get_user_stats, init_user_topics,
     get_current_topic, get_completed_topics, get_all_topics,
     start_repeating_topic, get_next_pending_topic, 
-    get_repeating_topics, calculate_progress_percentage, reset_to_next_topic,
-    complete_topic  # ← ЭТА СТРОКА БЫЛА ПРОПУЩЕНА
+    get_repeating_topics, calculate_progress_percentage, complete_topic
 )
 
-from aiogram import Router, F
-from aiogram.types import Message
-from aiogram.filters import CommandStart, Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-
-router = Router()
+# Создаём диспетчер (вместо router)
+dp = Dispatcher()
 
 # Состояния для хранения контекста урока
 class LessonStates(StatesGroup):
@@ -26,10 +23,8 @@ class LessonStates(StatesGroup):
     current_topic_name = State()
     current_topic_level = State()
 
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    
+@dp.message_handler(CommandStart())
+async def cmd_start(message: types.Message):
     # Сохраняем пользователя в базу
     user = get_or_create_user(
         message.from_user.id,
@@ -67,8 +62,8 @@ async def cmd_start(message: Message, state: FSMContext):
     
     await message.answer(welcome_text, reply_markup=kb.main_menu, parse_mode="HTML")
 
-@router.message(Command("help"))
-async def cmd_help(message: Message):
+@dp.message_handler(commands=['help'])
+async def cmd_help(message: types.Message):
     help_text = (
         "🔍 <b>Помощь</b>\n\n"
         "/start - Главное меню\n"
@@ -80,8 +75,8 @@ async def cmd_help(message: Message):
     )
     await message.answer(help_text, parse_mode="HTML", reply_markup=kb.main_menu)
 
-@router.message(F.text == "📚 Новый урок")
-async def new_lesson(message: Message, state: FSMContext):
+@dp.message_handler(lambda message: message.text == "📚 Новый урок")
+async def new_lesson(message: types.Message, state: FSMContext):
     # Получаем текущую тему для пользователя
     current_topic = get_current_topic(message.from_user.id)
     
@@ -120,35 +115,23 @@ async def new_lesson(message: Message, state: FSMContext):
         current_topic_level=current_topic['topic_level']
     )
 
-@router.message(Command("lesson"))
-async def cmd_lesson(message: Message, state: FSMContext):
-    await new_lesson(message, state)
-
-# Обработчик для кнопки выхода из урока
-@router.message(LessonStates.waiting_for_answer, F.text == "⬅️ В меню")
-async def cancel_lesson(message: Message, state: FSMContext):
+@dp.message_handler(state=LessonStates.waiting_for_answer, text="⬅️ В меню")
+async def cancel_lesson(message: types.Message, state: FSMContext):
     """Выход из урока в главное меню"""
-    await state.clear()
+    await state.finish()
     await message.answer(
         "👋 Возвращаюсь в главное меню. Хочешь продолжить позже — нажимай 'Новый урок'!",
         reply_markup=kb.main_menu,
         parse_mode="HTML"
     )
 
-# Обработчик для кнопки нового урока во время урока
-@router.message(LessonStates.waiting_for_answer, F.text == "📚 Новый урок")
-async def new_lesson_during_lesson(message: Message, state: FSMContext):
-    await state.clear()
+@dp.message_handler(state=LessonStates.waiting_for_answer, text="📚 Новый урок")
+async def new_lesson_during_lesson(message: types.Message, state: FSMContext):
+    await state.finish()
     await new_lesson(message, state)
 
-# Обработчик для кнопки повторения темы во время урока
-@router.message(LessonStates.waiting_for_answer, F.text == "🔄 Повторить тему")
-async def repeat_during_lesson(message: Message, state: FSMContext):
-    await state.clear()
-    await repeat_topic_menu(message)
-
-@router.message(LessonStates.waiting_for_answer)
-async def handle_answer(message: Message, state: FSMContext):
+@dp.message_handler(state=LessonStates.waiting_for_answer)
+async def handle_answer(message: types.Message, state: FSMContext):
     user_answer = message.text
     data = await state.get_data()
     topic_id = data.get('current_topic_id')
@@ -162,8 +145,7 @@ async def handle_answer(message: Message, state: FSMContext):
         user_answer=user_answer
     )
     
-    # Простая проверка для начисления XP (можно улучшить)
-    # Считаем правильным, если ответ не слишком короткий
+    # Простая проверка для начисления XP
     correct = len(user_answer.split()) >= 2
     
     # Сохраняем в базу
@@ -197,10 +179,10 @@ async def handle_answer(message: Message, state: FSMContext):
     update_streak(message.from_user.id)
     
     await message.answer(feedback, parse_mode="HTML", reply_markup=kb.lesson_keyboard)
-    await state.clear()
+    await state.finish()
 
-@router.message(F.text == "📊 Мой прогресс")
-async def show_progress(message: Message):
+@dp.message_handler(lambda message: message.text == "📊 Мой прогресс")
+async def show_progress(message: types.Message):
     stats = get_user_stats(message.from_user.id)
     user = stats['user']
     
@@ -251,8 +233,8 @@ async def show_progress(message: Message):
     
     await message.answer(progress_text, parse_mode="HTML", reply_markup=kb.main_menu)
 
-@router.message(F.text == "🔄 Повторить тему")
-async def repeat_topic_menu(message: Message):
+@dp.message_handler(lambda message: message.text == "🔄 Повторить тему")
+async def repeat_topic_menu(message: types.Message):
     # Получаем все пройденные темы
     completed = get_completed_topics(message.from_user.id)
     repeating = get_repeating_topics(message.from_user.id)
@@ -270,8 +252,8 @@ async def repeat_topic_menu(message: Message):
     topics_keyboard = []
     
     # Добавляем пройденные темы
-    for topic in completed[:10]:  # Покажем первые 10, чтобы не перегружать
-        short_name = topic['topic_name'][:30]  # Обрезаем длинные названия
+    for topic in completed[:10]:
+        short_name = topic['topic_name'][:30]
         topics_keyboard.append([KeyboardButton(text=f"🔄 {short_name}")])
     
     # Добавляем темы на повторении
@@ -295,8 +277,8 @@ async def repeat_topic_menu(message: Message):
         parse_mode="HTML"
     )
 
-@router.message(F.text.startswith("🔄") or F.text.startswith("🔁"))
-async def start_repeat_lesson(message: Message, state: FSMContext):
+@dp.message_handler(lambda message: message.text.startswith("🔄") or message.text.startswith("🔁"))
+async def start_repeat_lesson(message: types.Message, state: FSMContext):
     # Очищаем текст от эмодзи и пометок
     topic_text = message.text.replace("🔄 ", "").replace("🔁 ", "").replace(" (повтор)", "")
     
@@ -335,12 +317,12 @@ async def start_repeat_lesson(message: Message, state: FSMContext):
             reply_markup=kb.main_menu
         )
 
-@router.message(F.text == "❓ Помощь")
-async def help_button(message: Message):
+@dp.message_handler(lambda message: message.text == "❓ Помощь")
+async def help_button(message: types.Message):
     await cmd_help(message)
 
-@router.message()
-async def handle_unknown(message: Message):
+@dp.message_handler()
+async def handle_unknown(message: types.Message):
     """Обработка любых других сообщений"""
     await message.answer(
         "Я не понял команду. Используй кнопки или напиши /start",
