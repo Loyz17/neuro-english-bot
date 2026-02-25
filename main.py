@@ -2,7 +2,7 @@ import os
 from aiogram import Bot, Dispatcher, executor
 from dotenv import load_dotenv
 from app.database import init_db
-from app.handlers import dp
+from app.handlers import register_handlers
 
 async def on_startup(_):
     """Действия при запуске бота"""
@@ -17,7 +17,13 @@ if __name__ == '__main__':
     load_dotenv()
     bot = Bot(token=os.getenv('TG_TOKEN'))
     
-    # Запуск бота (aiogram 2.x)
+    # Создаём диспетчер
+    dp = Dispatcher(bot)
+    
+    # Регистрируем все обработчики
+    register_handlers(dp)
+    
+    # Запуск бота
     executor.start_polling(
         dp,
         skip_updates=True,
