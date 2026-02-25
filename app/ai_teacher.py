@@ -1,17 +1,15 @@
 import os
 import re
-from openai import OpenAI
+import openai
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Настройка клиента DeepSeek
-client = OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com"
-)
+# Настройка клиента DeepSeek для старой версии openai
+openai.api_key = os.getenv("DEEPSEEK_API_KEY")
+openai.api_base = "https://api.deepseek.com/v1"
 
-# Персональная инструкция от ученика (твой оригинальный запрос)
+# Персональная инструкция от ученика
 TEACHER_INSTRUCTION = """
 учи меня английскийскому языку, начинай, любыми методами как хочешь но так чтобы максимально быстро хотя бы за год я мог спокойно общаться. 
 если я делаю много ошибок в чем то не первый раз делай новые задания с акцентом на них чтобы они прорабатывались иногда для запоминания.
@@ -39,14 +37,14 @@ async def generate_lesson(level="beginner", topic="to be"):
 """
     
     try:
-        response = client.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="deepseek-chat",
             messages=[
                 {"role": "system", "content": "Ты опытный и добрый преподаватель английского языка. Твоя задача — научить ученика свободно общаться за год."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=800,  # Увеличил, чтобы хватило на процент и дни
+            max_tokens=800,
             timeout=30
         )
         content = response.choices[0].message.content
@@ -79,7 +77,7 @@ async def check_answer(question, user_answer):
 """
     
     try:
-        response = client.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="deepseek-chat",
             messages=[
                 {"role": "system", "content": "Ты добрый учитель английского. Не ругай за ошибки, а помогай. Всегда указывай прогресс."},
