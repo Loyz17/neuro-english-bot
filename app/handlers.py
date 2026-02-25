@@ -1,4 +1,3 @@
-import asyncio
 from aiogram import Dispatcher, types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import CommandStart, Command
@@ -13,9 +12,6 @@ from app.database import (
     get_repeating_topics, calculate_progress_percentage, complete_topic
 )
 
-# Создаём диспетчер (вместо router)
-dp = Dispatcher()
-
 # Состояния для хранения контекста урока
 class LessonStates(StatesGroup):
     waiting_for_answer = State()
@@ -23,8 +19,10 @@ class LessonStates(StatesGroup):
     current_topic_name = State()
     current_topic_level = State()
 
-@dp.message_handler(CommandStart())
+# ==================== ОБРАБОТЧИКИ КОМАНД ====================
+
 async def cmd_start(message: types.Message):
+    """Обработчик команды /start"""
     # Сохраняем пользователя в базу
     user = get_or_create_user(
         message.from_user.id,
@@ -62,8 +60,8 @@ async def cmd_start(message: types.Message):
     
     await message.answer(welcome_text, reply_markup=kb.main_menu, parse_mode="HTML")
 
-@dp.message_handler(commands=['help'])
 async def cmd_help(message: types.Message):
+    """Обработчик команды /help"""
     help_text = (
         "🔍 <b>Помощь</b>\n\n"
         "/start - Главное меню\n"
@@ -75,8 +73,13 @@ async def cmd_help(message: types.Message):
     )
     await message.answer(help_text, parse_mode="HTML", reply_markup=kb.main_menu)
 
-@dp.message_handler(lambda message: message.text == "📚 Новый урок")
-async def new_lesson(message: types.Message, state: FSMContext):
+# ==================== ОБРАБОТЧИКИ КНОПОК ====================
+
+async def new_lesson(message: types.Message, state: FSMContext = None):
+    """Начать новый урок"""
+    if state:
+        await state.finish()
+    
     # Получаем текущую тему для пользователя
     current_topic = get_current_topic(message.from_user.id)
     
@@ -108,81 +111,16 @@ async def new_lesson(message: types.Message, state: FSMContext):
     await message.answer(lesson, parse_mode="HTML")
     
     # Сохраняем тему урока в состояние
-    await state.set_state(LessonStates.waiting_for_answer)
+    await LessonStates.waiting_for_answer.set()
+    state = dp.current_state(chat=message.chat.id, user=message.from_user.id)
     await state.update_data(
         current_topic_id=current_topic['id'],
         current_topic_name=current_topic['topic_name'],
         current_topic_level=current_topic['topic_level']
     )
 
-@dp.message_handler(state=LessonStates.waiting_for_answer, text="⬅️ В меню")
-async def cancel_lesson(message: types.Message, state: FSMContext):
-    """Выход из урока в главное меню"""
-    await state.finish()
-    await message.answer(
-        "👋 Возвращаюсь в главное меню. Хочешь продолжить позже — нажимай 'Новый урок'!",
-        reply_markup=kb.main_menu,
-        parse_mode="HTML"
-    )
-
-@dp.message_handler(state=LessonStates.waiting_for_answer, text="📚 Новый урок")
-async def new_lesson_during_lesson(message: types.Message, state: FSMContext):
-    await state.finish()
-    await new_lesson(message, state)
-
-@dp.message_handler(state=LessonStates.waiting_for_answer)
-async def handle_answer(message: types.Message, state: FSMContext):
-    user_answer = message.text
-    data = await state.get_data()
-    topic_id = data.get('current_topic_id')
-    topic_name = data.get('current_topic_name', 'unknown')
-    
-    await message.answer("⏳ Проверяю ответ...")
-    
-    # Проверяем ответ через DeepSeek
-    feedback = await check_answer(
-        question=f"Задание по теме '{topic_name}'",
-        user_answer=user_answer
-    )
-    
-    # Простая проверка для начисления XP
-    correct = len(user_answer.split()) >= 2
-    
-    # Сохраняем в базу
-    save_answer(
-        message.from_user.id,
-        topic_name,
-        f"Урок по теме {topic_name}",
-        user_answer,
-        correct
-    )
-    
-    if correct:
-        add_xp(message.from_user.id, 10)
-        
-        # Отмечаем тему как пройденную
-        complete_topic(message.from_user.id, topic_id)
-        
-        # Получаем следующую тему
-        next_topic = get_next_pending_topic(message.from_user.id)
-        progress = calculate_progress_percentage(message.from_user.id)
-        
-        feedback += f"\n\n✅ <b>+10 XP!</b>"
-        feedback += f"\n📊 <b>Прогресс: {progress}%</b>"
-        
-        if next_topic:
-            feedback += f"\n📚 Следующая тема: <b>{next_topic['topic_name']}</b>"
-        else:
-            feedback += "\n🎉 Ты прошёл все темы! Можешь повторить что угодно."
-    
-    # Обновляем серию
-    update_streak(message.from_user.id)
-    
-    await message.answer(feedback, parse_mode="HTML", reply_markup=kb.lesson_keyboard)
-    await state.finish()
-
-@dp.message_handler(lambda message: message.text == "📊 Мой прогресс")
 async def show_progress(message: types.Message):
+    """Показать прогресс пользователя"""
     stats = get_user_stats(message.from_user.id)
     user = stats['user']
     
@@ -233,8 +171,8 @@ async def show_progress(message: types.Message):
     
     await message.answer(progress_text, parse_mode="HTML", reply_markup=kb.main_menu)
 
-@dp.message_handler(lambda message: message.text == "🔄 Повторить тему")
 async def repeat_topic_menu(message: types.Message):
+    """Меню выбора темы для повторения"""
     # Получаем все пройденные темы
     completed = get_completed_topics(message.from_user.id)
     repeating = get_repeating_topics(message.from_user.id)
@@ -277,8 +215,79 @@ async def repeat_topic_menu(message: types.Message):
         parse_mode="HTML"
     )
 
-@dp.message_handler(lambda message: message.text.startswith("🔄") or message.text.startswith("🔁"))
+async def help_button(message: types.Message):
+    """Кнопка помощи"""
+    await cmd_help(message)
+
+# ==================== ОБРАБОТЧИКИ СОСТОЯНИЙ ====================
+
+async def cancel_lesson(message: types.Message, state: FSMContext):
+    """Выход из урока в главное меню"""
+    await state.finish()
+    await message.answer(
+        "👋 Возвращаюсь в главное меню. Хочешь продолжить позже — нажимай 'Новый урок'!",
+        reply_markup=kb.main_menu,
+        parse_mode="HTML"
+    )
+
+async def new_lesson_during_lesson(message: types.Message, state: FSMContext):
+    """Начать новый урок во время текущего"""
+    await state.finish()
+    await new_lesson(message)
+
+async def handle_answer(message: types.Message, state: FSMContext):
+    """Обработка ответа на задание"""
+    user_answer = message.text
+    data = await state.get_data()
+    topic_id = data.get('current_topic_id')
+    topic_name = data.get('current_topic_name', 'unknown')
+    
+    await message.answer("⏳ Проверяю ответ...")
+    
+    # Проверяем ответ через DeepSeek
+    feedback = await check_answer(
+        question=f"Задание по теме '{topic_name}'",
+        user_answer=user_answer
+    )
+    
+    # Простая проверка для начисления XP
+    correct = len(user_answer.split()) >= 2
+    
+    # Сохраняем в базу
+    save_answer(
+        message.from_user.id,
+        topic_name,
+        f"Урок по теме {topic_name}",
+        user_answer,
+        correct
+    )
+    
+    if correct:
+        add_xp(message.from_user.id, 10)
+        
+        # Отмечаем тему как пройденную
+        complete_topic(message.from_user.id, topic_id)
+        
+        # Получаем следующую тему
+        next_topic = get_next_pending_topic(message.from_user.id)
+        progress = calculate_progress_percentage(message.from_user.id)
+        
+        feedback += f"\n\n✅ <b>+10 XP!</b>"
+        feedback += f"\n📊 <b>Прогресс: {progress}%</b>"
+        
+        if next_topic:
+            feedback += f"\n📚 Следующая тема: <b>{next_topic['topic_name']}</b>"
+        else:
+            feedback += "\n🎉 Ты прошёл все темы! Можешь повторить что угодно."
+    
+    # Обновляем серию
+    update_streak(message.from_user.id)
+    
+    await message.answer(feedback, parse_mode="HTML", reply_markup=kb.lesson_keyboard)
+    await state.finish()
+
 async def start_repeat_lesson(message: types.Message, state: FSMContext):
+    """Начать урок повторения по выбранной теме"""
     # Очищаем текст от эмодзи и пометок
     topic_text = message.text.replace("🔄 ", "").replace("🔁 ", "").replace(" (повтор)", "")
     
@@ -305,7 +314,8 @@ async def start_repeat_lesson(message: types.Message, state: FSMContext):
         
         await message.answer(lesson, parse_mode="HTML")
         
-        await state.set_state(LessonStates.waiting_for_answer)
+        await LessonStates.waiting_for_answer.set()
+        state = dp.current_state(chat=message.chat.id, user=message.from_user.id)
         await state.update_data(
             current_topic_id=selected_topic['id'],
             current_topic_name=selected_topic['topic_name'],
@@ -317,14 +327,34 @@ async def start_repeat_lesson(message: types.Message, state: FSMContext):
             reply_markup=kb.main_menu
         )
 
-@dp.message_handler(lambda message: message.text == "❓ Помощь")
-async def help_button(message: types.Message):
-    await cmd_help(message)
-
-@dp.message_handler()
 async def handle_unknown(message: types.Message):
     """Обработка любых других сообщений"""
     await message.answer(
         "Я не понял команду. Используй кнопки или напиши /start",
         reply_markup=kb.main_menu
     )
+
+# ==================== РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ ====================
+
+def register_handlers(dp: Dispatcher):
+    """Регистрирует все обработчики в диспетчере"""
+    # Команды
+    dp.register_message_handler(cmd_start, commands=['start'])
+    dp.register_message_handler(cmd_help, commands=['help'])
+    
+    # Кнопки меню
+    dp.register_message_handler(new_lesson, lambda message: message.text == "📚 Новый урок")
+    dp.register_message_handler(show_progress, lambda message: message.text == "📊 Мой прогресс")
+    dp.register_message_handler(repeat_topic_menu, lambda message: message.text == "🔄 Повторить тему")
+    dp.register_message_handler(help_button, lambda message: message.text == "❓ Помощь")
+    
+    # Обработчики состояний (важен порядок!)
+    dp.register_message_handler(cancel_lesson, state=LessonStates.waiting_for_answer, text="⬅️ В меню")
+    dp.register_message_handler(new_lesson_during_lesson, state=LessonStates.waiting_for_answer, text="📚 Новый урок")
+    dp.register_message_handler(handle_answer, state=LessonStates.waiting_for_answer)
+    
+    # Обработчик выбора темы для повторения
+    dp.register_message_handler(start_repeat_lesson, lambda message: message.text.startswith("🔄") or message.text.startswith("🔁"))
+    
+    # Обработчик всего остального (должен быть последним)
+    dp.register_message_handler(handle_unknown)
